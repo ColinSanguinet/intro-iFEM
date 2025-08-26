@@ -5,7 +5,7 @@ include("BeamElement.jl");
 R = 0.0;  # Radius of the bend [m]
 EI₂ = 833.33e3;  # Bending stiffness [Nm²]
 EI₃ = 833.33e3;  # Bending stiffness [Nm²]
-EA = 1e9;  # Axial stiffness [N]
+EA = 1e8;  # Axial stiffness [N]
 GJ = 705e3;  # Torsional stiffness [Nm²]
 L = 10;  # Length of the beam [m]
 
