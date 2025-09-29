@@ -23,10 +23,8 @@ eleid       = addelement!(model,EulerBeam3D,mesh;mat=mat,orient2=SVector(0.,1.,0
 [addelement!(model,Hold,[nodid[10]]  ;field) for field∈[:t3]]; # Support at the other end
 
 function load(t)
-    a = -20
-    t<=1. ? load=a*t*300. :
-    t>1. && t<=2. ? load=a*(300. +(t-1)*150.) :
-    load=a*(4500. +(t-2)*1500.)
+    a = 1e6
+    return sin(t*2*π/10)*a; # Load in N
 end
 addelement!(model,DofLoad,[nodid[5]];field=:t3,value=t->load(t));
 
