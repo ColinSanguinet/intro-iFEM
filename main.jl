@@ -1,6 +1,8 @@
 using Muscade, StaticArrays, GLMakie
 include("BeamElement.jl");
 
+study_type = :Dynamic; # :Static or :Modal or :Dynamic
+
 
 R = 0.0;  # Radius of the bend [m]
 EI₂ = 833.33e3;  # Bending stiffness [Nm²]
@@ -31,10 +33,13 @@ end
 addelement!(model,DofLoad,[nodid[5]];field=:t3,value=t->load(t));
 
 
-initialstate    = initialize!(model);
-loadSteps = [0.,1.,2.,3.];
+
+initialstate    = initialize!(model; time = 0.);
+loadSteps = [i for i in 0.05:0.05:25.];
 nLoadSteps = length(loadSteps)
-state           = solve(SweepX{0};initialstate,time=loadSteps,verbose=true,maxΔx=1e-9);
+state           = solve(SweepX{2};initialstate,time=loadSteps,verbose=true,maxΔx=1e-9, maxiter = 50);
+
+
 
 x_ = [getdof(state[idxLoad];field=:t1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
 y_ = [getdof(state[idxLoad];field=:t2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
@@ -44,7 +49,7 @@ fig     = Figure(size = (1000,1000))
 ax      = Axis3(fig[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
 clr = [:black,:blue,:green,:red]
 for idxLoad ∈ 1:nLoadSteps
-    draw!(ax,state[idxLoad];EulerBeam3D=(;nseg=10,line_color=clr[idxLoad]))
+    draw!(ax,state[idxLoad];EulerBeam3D=(;nseg=10))
 end
 xlims!(ax, -5,5); ylims!(ax, -5,5); zlims!(ax, -5,5);
 save("first_plot.png", fig)
