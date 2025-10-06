@@ -59,12 +59,6 @@ end
 display(figure)
 figure
 
-
-
-
-
-
-
 inv_model, nodid, nnodes = createSimplySupportedBeam(:InverseModel_bis)
 
 T = Tsin
