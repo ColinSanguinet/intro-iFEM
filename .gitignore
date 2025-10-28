@@ -1,5 +1,5 @@
 output/
 input/
-Report/*.aux
-Report/*.log
-Report/*.gz
+Report/
+!Report/report.tex
+!Report/report.pdf
