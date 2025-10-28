@@ -63,18 +63,20 @@ end;
     xₗ₁          = xᵧ₁ ∘₁ r₀
     xₗ₂          = xᵧ₂ ∘₁ r₀
     ## Compute translational inertia force 
-    fi = o.μ * xᵧ₂ 
-    ☼fₑ = fi # external forces at Gauss point.
+    fi = o.μ * xᵧ₂
+    fdₗ = -o.β * o.EA * xₗ₁
+    fdᵧ = fdₗ ∘₁ r₀'
+    ☼fₑ = fi + fdᵧ # external forces at Gauss point.
     ## Compute roll inertia moment 
-    m₁ₗ = o.ι₁*vᵢ₂[1] #local 
+    m₁ₗ = o.ι₁*vᵢ₂[1] - o.GJ*o.β*∂1(κ)[1] - o.EI₃*o.β*∂1(κ)[2] - o.EI₂*o.β*∂1(κ)[3]  #local 
     mᵧ = ∂0(rₛₘ)[:,1] * m₁ₗ #global
     ☼mₑ = mᵧ  # external couples at Gauss point. 
     ## Compute internal loads
-    ☼fᵢ = o.EA*(∂0(ε)-o.β*∂1(ε))
+    ☼fᵢ = o.EA*(∂0(ε))
     ## WARNING: curvatures are defined as rate of rotation along the element, not second derivatives of deflection.  
     ## Hence κ[3]>0 implies +2 direction is inside curve, 
     ##       κ[2]>0 implies -3 direction is inside curve.
-    ☼mᵢ  = SVector(o.GJ*(∂0(κ)[1]-o.β*∂1(κ)[1]),o.EI₃*(∂0(κ)[2]-o.β*∂1(κ)[2]),o.EI₂*(∂0(κ)[3]-o.β*∂1(κ)[3]))
+    ☼mᵢ  = SVector(o.GJ*∂0(κ)[1],o.EI₃*∂0(κ)[2],o.EI₂*∂0(κ)[3])
     return fᵢ,mᵢ,fₑ,mₑ
 end;
 

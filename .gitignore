@@ -1,1 +1,5 @@
 output/
+input/
+Report/*.aux
+Report/*.log
+Report/*.gz
