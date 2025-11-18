@@ -143,18 +143,18 @@ if bInverseAnalysis
     r3_int = [linear_interpolation(time_inv, vcat(r3_sin[node]...)) for node in 1:nnodes]
 
 
-    @functor with() costX(x, t, meas) = 10000000 * (meas(t)-x)^2
-    @functor with() costXother(x, t, meas) = 100 * (meas(t)-x)^2
+    @functor with() costX(x, t, meas) = 1 * (meas(t)-x)^2
+    @functor with() costXother(x, t, meas) = 1 * (meas(t)-x)^2
     @functor with() costU(u, t) = 1*(F-u)^2
     @functor with() costUother(u, t) = 1*u^2
     e5             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t1,    cost= costXother, costargs= (meas = x_int[node],) ) for node in 1:nnodes]
     e6             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t2,    cost= costX, costargs= (meas = y_int[node],) ) for node in 1:nnodes]
     e7             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t3,    cost= costXother, costargs= (meas = z_int[node],) ) for node in 1:nnodes];
     e7             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:r3,    cost= costXother, costargs= (meas = r3_int[node],) ) for node in 1:nnodes];
-    e2             = [addelement!(inv_model,SingleUdof,[nodid[node]]; class=:U,field=:t3           ,    cost=costUother )  for node in 1:nnodes-1];
-    e3             = [addelement!(inv_model,SingleUdof,[nodid[node_number]]; class=:U,field=:t2           ,    cost=costU )];
-    e3             = [addelement!(inv_model,SingleUdof,[nodid[node]]; class=:U,field=:t2           ,    cost=costUother )  for node in 1:nnodes-1 if node != node_number];
-    e4             = [addelement!(inv_model,SingleUdof,[nodid[node]]; class=:U,field=:t1           ,    cost=costUother )  for node in 1:nnodes-1];
+    e2             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t3,Ufield=:t3           ,    cost=costUother )  for node in 1:nnodes-1];
+    e3             = [addelement!(inv_model,SingleUdof,[nodid[node_number]]; Xfield=:t2,Ufield=:t2    ,    cost=costU )];
+    e3             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t2,Ufield=:t2           ,    cost=costUother )  for node in 1:nnodes-1 if node != node_number];
+    e4             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t1,Ufield=:t1           ,    cost=costUother )  for node in 1:nnodes-1];
 
 
     [[addelement!(inv_model,Hold,[nodid[i]] ;field) for field∈[:t3, :r2, :r1]] for i in 1:nnodes]
@@ -168,15 +168,8 @@ if bInverseAnalysis
     z_inv = [[getdof(stateXUA[1][idxLoad];field=:t3,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
     r1_inv = [[getdof(stateXUA[1][idxLoad];field=:r1,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
     r2_inv = [[getdof(stateXUA[1][idxLoad];field=:r2,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-    r3_inv = [[getdof(stateXUA[1][idxLoad];field=:r3,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
+    r3_inv = [[getdof(stateXUA[1][idxLoad];field=:r3,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes] 
 
-    figure     = Figure(size = (1000,1000))
-    ax      = Axis3(figure[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
-    for to_draw in 1:10:nLoadSteps
-        draw!(ax,stateXUA[1][to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(1.0, to_draw/nLoadSteps, 0.)))
-    end
-    display(figure)
-    figure
 
     U_t = [[getdof(stateXUA[1][idxLoad];class = :U, field=:t2,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
 
@@ -191,5 +184,14 @@ if bInverseAnalysis
     [lines!(ax, time_inv, vcat(y_inv[25]...); color = :blue)]
     [lines!(ax, time_inv,[y_int[25](i) for i in time_inv]; color = :tomato)]
     display(fig_disp)
+
+    figure     = Figure(size = (1000,1000))
+    ax      = Axis3(figure[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
+    for to_draw in 1:10:nLoadSteps
+        draw!(ax,stateXUA[1][to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(1.0, to_draw/nLoadSteps, 0.)))
+        draw!(ax,state[to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(0.0, 0.0, 1.0 )))
+    end
+    display(figure)
+    figure
 end
 
