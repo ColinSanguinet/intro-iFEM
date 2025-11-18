@@ -9,11 +9,11 @@ using Muscade, StaticArrays, GLMakie, CSV, DataFrames, Interpolations
 using Muscade.Toolbox
 
 # Material Properties and Beam Geometry
-R   = 0.0;          # Radius of the bend [m]
-EI₂ = 1e5;     # Bending stiffness [Nm²]
-EI₃ = 1e5;     # Bending stiffness [Nm²]
+#R   = 0.0;          # Radius of the bend [m]
+EI₂ = 1e5;          # Bending stiffness [Nm²]
+EI₃ = 1e5;          # Bending stiffness [Nm²]
 EA  = 1e6;          # Axial stiffness [N]
-GJ  = 1e6;        # Torsional stiffness [Nm²]
+GJ  = 1e6;          # Torsional stiffness [Nm²]
 L   = 10.;          # Length of the beam [m]
 μ   = 1.;           # Linear mass along main axis [kg/m]
 ι₁  = 1.;           # Mass moment of inertia around main axis [kg·m³]
@@ -35,7 +35,7 @@ DirectSolver        = SweepX{0}     # 2 for Dynamic solver, 1 for Static solver
 Δt₀                 = 0.01          # Initial time step [s]
 
 # Load properties
-F           = 1000.0      # Amplitude of the load [N]
+F           = -1000.0      # Amplitude of the load [N]
 q           = 0.0          # Uniform lateral load [N/m]
 t_impulse   = 0.1        # Duration of the impulse load [s]
 
