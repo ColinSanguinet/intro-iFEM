@@ -15,7 +15,7 @@ For scalar series (no underscore in column naming) `name` will be written as a s
 
 Returns `true` on success.
 """
-function save_timeseries_csv(path; comps::Dict=Dict(), time=nothing)
+function save_timeseries_csv(path; metadata, comps::Dict=Dict(),  time=nothing)
     isempty(comps) && error("`comps` must be a Dict mapping series names to vector-of-vectors, e.g. Dict(\"X\"=>x_, ...)")
 
     # Basic validation: all series must have same number of time steps
@@ -68,7 +68,9 @@ function save_timeseries_csv(path; comps::Dict=Dict(), time=nothing)
         end
     end
 
-    CSV.write(base * ".csv", df)
+    save_metadata(base, metadata)
+
+    CSV.write(base * ".csv", df ; writeheader = true, append=true)
     return true
 end
 
@@ -90,7 +92,18 @@ function load_timeseries_csv(path)
     
     !isfile(csvfile) && error("CSV file not found: $csvfile")
     
-    df = CSV.File(csvfile) |> DataFrame
+    # Extract metadata
+    first_lines = readlines(csvfile)[1:4]
+
+    # Extract metadata, headers, and values
+    headers = split(first_lines[2], ",")
+    values = split(first_lines[3], ",")
+
+    # Build dictionary
+    metadata_dict = Dict(h => to_value(v) for (h, v) in zip(headers, values))
+
+    # Extract data
+    df = CSV.File(csvfile; skipto=6, header = 5) |> DataFrame
     nsteps = size(df, 1)
     
     # Extract time column if present
@@ -135,17 +148,46 @@ function load_timeseries_csv(path)
         series_dict[series_name] = M
     end
     
+
     # Load scalar series
     for col in scalar_cols
         scalar_dict[col] = Vector(df[:, Symbol(col)])
     end
     
-    # Infer shape from first per-node series (if any)
-    shape = nothing
-    if !isempty(series_dict)
-        first_series = first(values(series_dict))
-        shape = size(first_series)
-    end
-    
-    return (time=time, series=series_dict, scalar_series=scalar_dict, shape=shape)
+    return (time=time, series=series_dict, scalar_series=scalar_dict, metadata=metadata_dict)
 end
+
+function add_struct_to_dict(dict, structure)
+    for field in fieldnames(typeof(structure))
+        dict[string(field)] = getfield(structure, field)
+    end
+    return dict
+end
+
+function save_metadata(base, meta)
+    # Collect field names and values
+    fields = []
+    values = []
+    for k in meta 
+        push!(fields, k[1])
+        push!(values, k[2])
+    end
+
+    # Convert everything to strings safely
+    title_row = ["METADATA"]
+    header_row = string.(fields)
+    metadata_row = string.(values)
+    data_row = ["DATA"]
+
+    # Open file and write properly quoted CSV
+    open(base * ".csv", "w") do io
+        println(io, join(title_row, ","))   # First row
+        println(io, join(header_row, ","))     # Second row
+        println(io, join(metadata_row, ","))       # Third row
+        println(io, join(data_row, ","))   # Fourth row
+    end
+
+end
+
+# Tests
+#------------------------------------------
