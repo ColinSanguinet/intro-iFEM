@@ -1,5 +1,13 @@
 using CSV, DataFrames
+using Dates
 
+function yyyymmdd()
+    return Dates.format(Dates.today(), "yyyymmdd")
+end
+
+function dated_base(base::AbstractString)
+    return string(yyyymmdd(),"_",base)
+end
 
 """
     save_timeseries_csv(path; comps::Dict, time=nothing)

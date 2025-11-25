@@ -7,6 +7,13 @@
 
 using Muscade, StaticArrays, GLMakie, CSV, DataFrames, Interpolations
 using Muscade.Toolbox
+include("save_results.jl")
+
+
+##########################################
+# Inputs
+##########################################
+
 
 # Material Properties and Beam Geometry
 #R   = 0.0;          # Radius of the bend [m]
@@ -19,12 +26,29 @@ L   = 10.;          # Length of the beam [m]
 ι₁  = 1.;           # Mass moment of inertia around main axis [kg·m³]
 mat         = BeamCrossSection(EA=EA,EI₂=EI₂,EI₃=EI₃,GJ=GJ,μ=μ,ι₁=ι₁);
 
-# Mesh Definition
+# General properties
+t₁ = 0.0
+t₂ = 1.0
+maxiter     = 10
+maxΔx       = 1e-6
+maxΔu       = 1e-6
+maxΔa       = 1e-6
+maxΔλ       = Inf
+
+# Mesh Definition Direct
 nel         = 50    # Number of elements
 nnodes      = nel+1 # Number of nodes
 nodeCoord   = hcat((0:L/nel:L),zeros(Float64,nnodes,2)); # Node coordinates
 
+# Mesh Definition Inverse
+nel_inv         = 50    # Number of elements
+nnodes_inv      = nel_inv+1 # Number of nodes
+nodeCoord_inv   = hcat((0:L/nel_inv:L),zeros(Float64,nnodes_inv,2)); # Node coordinates
+
 # Direct Dynamic analysis properties
+Δt₀                 = 0.01          # Initial time step [s]
+time = t₁+Δt₀:Δt₀:t₂
+nLoadSteps = length(time)
 bNodalForceImpulse  = false
 bNodalForceSin      = false
 bNodalStaticForce   = true
@@ -32,7 +56,6 @@ node_number        = Int(floor(nnodes/2)) # Node where the static load is applie
 bEigenAnalysis      = false
 bPlanar             = bEigenAnalysis # Planar motion constraint for eigenvalue analysis
 DirectSolver        = SweepX{0}     # 2 for Dynamic solver, 1 for Static solver
-Δt₀                 = 0.01          # Initial time step [s]
 
 # Load properties
 F           = -1000.0      # Amplitude of the load [N]
@@ -40,22 +63,46 @@ q           = 0.0          # Uniform lateral load [N/m]
 t_impulse   = 0.1        # Duration of the impulse load [s]
 
 # Inverse analysis properties
-bInverseAnalysis = true
-InvSolver        = DirectXUA{0,0,0}   # Dynamic solver for the inverse analysis
 Δtᵢₙᵥ             = 0.01               # Time step for the inverse analysis [s]
-
-# General properties
-t₁ = 0.0
-t₂ = 1.0
-time = t₁+Δt₀:Δt₀:t₂
-nLoadSteps = length(time)
 time_inv = t₁+Δt₀:Δtᵢₙᵥ:t₂
 nLoadSteps_inv = length(time_inv)
-maxiter     = 10
-maxΔx       = 1e-6
-maxΔu       = 1e-6
-maxΔa       = 1e-6
-maxΔλ       = Inf
+bInverseAnalysis = true
+InvSolver        = DirectXUA{0,0,0}   # Dynamic solver for the inverse analysis
+
+
+# Post-processing of the direct analysis
+bSaveFigures = false
+bShow3DBeam = false
+
+# Saving config
+saveDirect = true
+basename_direct = "direct_test"
+metadata_direct = add_struct_to_dict(
+    Dict{}(
+        "nel" => nel,
+        "nodeCoord" => nodeCoord,
+        "typeOfLoad" => "point force"
+    ), 
+    mat)
+
+saveInverse = true
+basename_inverse = "inverse_test"
+metadata_inverse = add_struct_to_dict(
+    Dict{}(
+        "nel" => nel_inv,
+        "nodeCoord" => nodeCoord_inv,
+        "typeOfLoad" => "point force"
+    ), 
+    mat)
+
+##########################################
+# Solving
+##########################################
+
+
+# Direct model
+#------------------------------------------
+
 
 # Direct model
 name        = :BeamDynSinusoidalLoad
@@ -88,7 +135,7 @@ if bNodalStaticForce
 end
 
 # Initializing the model (sets all DoF to 0 at t=t₁)
-initialstate                = initialize!(model; time=0.);
+initialstate                = initialize!(model; time=t₁);
 
 if bEigenAnalysis
     state_stat   = solve(SweepX{0};initialstate,time=[t₁]);
@@ -100,30 +147,45 @@ end
 # Solving in direct mode
 state                       = solve(DirectSolver;initialstate,time,verbose=true,maxΔx, maxiter);
 
+x_dir = [getdof(state[idxLoad];field=:t1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
+y_dir = [getdof(state[idxLoad];field=:t2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
+z_dir = [getdof(state[idxLoad];field=:t3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
+r1_dir = [getdof(state[idxLoad];field=:r1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
+r2_dir = [getdof(state[idxLoad];field=:r2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
+r3_dir = [getdof(state[idxLoad];field=:r3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
 
+# Save
+if saveDirect
 
+    timeseries = Dict(
+        "X" => x_dir,
+        "Y" => y_dir,
+        "Z" => z_dir,
+        "R1" => r1_dir,
+        "R2" => r2_dir,
+        "R3" => r3_dir,
+    )
 
-# Post-processing of the direct analysis
-bSaveFigures = false
-bShow3DBeam = true
-
-x_sin = [[getdof(state[idxLoad];field=:t1,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-y_sin = [[getdof(state[idxLoad];field=:t2,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-z_sin = [[getdof(state[idxLoad];field=:t3,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-r1_sin = [[getdof(state[idxLoad];field=:r1,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-r2_sin = [[getdof(state[idxLoad];field=:r2,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-r3_sin = [[getdof(state[idxLoad];field=:r3,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-
-figure     = Figure(size = (1000,1000))
-ax      = Axis3(figure[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
-for to_draw in 1:10:nLoadSteps
-    draw!(ax,state[to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(1.0, to_draw/nLoadSteps, 0.)))
+    save_timeseries_csv(dated_base(basename_direct); metadata = metadata_direct, comps=timeseries, time=time)
 end
-display(figure)
-figure
 
+# # Draw
+# figure     = Figure(size = (1000,1000))
+# ax      = Axis3(figure[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
+# for to_draw in 1:10:nLoadSteps
+#     draw!(ax,state[to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(1.0, to_draw/nLoadSteps, 0.)))
+# end
+# display(figure)
+# figure
+
+
+# Inverse model
+#------------------------------------------
 
 if bInverseAnalysis
+    nnodes = nnodes_inv
+    nodeCoord = nodeCoord_inv
+
     name        = :BeamDynSinusoidalLoads
     inv_model       = Model(name)
     nodid       = addnode!(inv_model, nodeCoord)
@@ -163,35 +225,51 @@ if bInverseAnalysis
     stateXUA         = solve(InvSolver;initialstate=[initialstate], time=[time_inv],verbose=true,maxiter,maxΔx,maxΔλ,maxΔu,maxΔa);
 
 
-    x_inv = [[getdof(stateXUA[1][idxLoad];field=:t1,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-    y_inv = [[getdof(stateXUA[1][idxLoad];field=:t2,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-    z_inv = [[getdof(stateXUA[1][idxLoad];field=:t3,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-    r1_inv = [[getdof(stateXUA[1][idxLoad];field=:r1,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-    r2_inv = [[getdof(stateXUA[1][idxLoad];field=:r2,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
-    r3_inv = [[getdof(stateXUA[1][idxLoad];field=:r3,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes] 
+    x_inv =  [getdof(stateXUA[1][idxLoad];field=:t1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
+    y_inv =  [getdof(stateXUA[1][idxLoad];field=:t2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
+    z_inv =  [getdof(stateXUA[1][idxLoad];field=:t3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
+    r1_inv = [getdof(stateXUA[1][idxLoad];field=:r1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
+    r2_inv = [getdof(stateXUA[1][idxLoad];field=:r2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
+    r3_inv = [getdof(stateXUA[1][idxLoad];field=:r3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
 
 
-    U_t = [[getdof(stateXUA[1][idxLoad];class = :U, field=:t2,nodID=[nodid[node]]) for idxLoad ∈ 1:nLoadSteps] for node in 1:nnodes]
+    U_t_inv = [getdof(stateXUA[1][idxLoad];class = :U, field=:t2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
 
-    fig_l = Figure(size = (1000,1000))
-    axl = Axis(fig_l[1, 1])
-    lines!(axl, 1:100, vcat(U_t[node_number+3]...); color = :tomato)
-    lines!(axl, 1:100, vcat([F for t in 1:nLoadSteps_inv]...); color = :blue)
-    display(fig_l)
+    # Save
 
-    fig_disp = Figure(size = (1000,1000))
-    ax = Axis(fig_disp[1, 1])
-    [lines!(ax, time_inv, vcat(y_inv[25]...); color = :blue)]
-    [lines!(ax, time_inv,[y_int[25](i) for i in time_inv]; color = :tomato)]
-    display(fig_disp)
+    if saveInverse
 
-    figure     = Figure(size = (1000,1000))
-    ax      = Axis3(figure[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
-    for to_draw in 1:10:nLoadSteps
-        draw!(ax,stateXUA[1][to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(1.0, to_draw/nLoadSteps, 0.)))
-        draw!(ax,state[to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(0.0, 0.0, 1.0 )))
+        timeseries = Dict(
+            "X" => x_inv,
+            "Y" => y_inv,
+            "Z" => z_inv,
+            "R1" => r1_inv,
+            "R2" => r2_inv,
+            "R3" => r3_inv,
+        )
+
+        save_timeseries_csv(dated_base(basename_inverse); metadata = metadata_inverse, comps=timeseries, time=time_inv)
     end
-    display(figure)
-    figure
-end
 
+    # # Draw
+    # fig_l = Figure(size = (1000,1000))
+    # axl = Axis(fig_l[1, 1])
+    # lines!(axl, 1:100, vcat(U_t_inv[node_number+3]...); color = :tomato)
+    # lines!(axl, 1:100, vcat([F for t in 1:nLoadSteps_inv]...); color = :blue)
+    # display(fig_l)
+
+    # fig_disp = Figure(size = (1000,1000))
+    # ax = Axis(fig_disp[1, 1])
+    # [lines!(ax, time_inv, vcat(y_inv[25]...); color = :blue)]
+    # [lines!(ax, time_inv,[y_int[25](i) for i in time_inv]; color = :tomato)]
+    # display(fig_disp)
+
+    # figure     = Figure(size = (1000,1000))
+    # ax      = Axis3(figure[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
+    # for to_draw in 1:10:nLoadSteps
+    #     draw!(ax,stateXUA[1][to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(1.0, to_draw/nLoadSteps, 0.)))
+    #     draw!(ax,state[to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(0.0, 0.0, 1.0 )))
+    # end
+    # display(figure)
+    # figure
+end
