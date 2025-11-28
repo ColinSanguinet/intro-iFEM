@@ -36,7 +36,7 @@ maxΔa       = 1e-6
 maxΔλ       = Inf
 
 # Mesh Definition Direct
-nel         = 50    # Number of elements
+nel         = 10    # Number of elements
 nnodes      = nel+1 # Number of nodes
 nodeCoord   = hcat((0:L/nel:L),zeros(Float64,nnodes,2)); # Node coordinates
 
@@ -46,6 +46,7 @@ nnodes_inv      = nel_inv+1 # Number of nodes
 nodeCoord_inv   = hcat((0:L/nel_inv:L),zeros(Float64,nnodes_inv,2)); # Node coordinates
 
 # Direct Dynamic analysis properties
+bDirectAnalysis = false
 Δt₀                 = 0.01          # Initial time step [s]
 time = t₁+Δt₀:Δt₀:t₂
 nLoadSteps = length(time)
@@ -67,25 +68,24 @@ t_impulse   = 0.1        # Duration of the impulse load [s]
 time_inv = t₁+Δt₀:Δtᵢₙᵥ:t₂
 nLoadSteps_inv = length(time_inv)
 bInverseAnalysis = true
+bFromSavedDatas = true
+path_to_data = "20251128_direct_static_10elts.csv"
 InvSolver        = DirectXUA{0,0,0}   # Dynamic solver for the inverse analysis
 
-
-# Post-processing of the direct analysis
-bSaveFigures = false
-bShow3DBeam = false
-
 # Saving config
-saveDirect = true
-basename_direct = "direct_test"
+saveDirect = false
+basename_direct = "direct_static_" * string(nel) * "elts"
 metadata_direct = add_struct_to_dict(
     Dict{}(
         "nel" => nel,
         "nodeCoord" => nodeCoord,
-        "typeOfLoad" => "point force"
+        "typeOfLoad" => "point force",
+        "F" => F,
+        "nodenumber_of_force" => node_number
     ), 
     mat)
 
-saveInverse = true
+saveInverse = false
 basename_inverse = "inverse_test"
 metadata_inverse = add_struct_to_dict(
     Dict{}(
@@ -95,6 +95,11 @@ metadata_inverse = add_struct_to_dict(
     ), 
     mat)
 
+# Post-processing of the direct analysis
+bSaveFigures = false
+bShow3DBeam = false
+
+
 ##########################################
 # Solving
 ##########################################
@@ -103,137 +108,151 @@ metadata_inverse = add_struct_to_dict(
 # Direct model
 #------------------------------------------
 
+if bDirectAnalysis
+    # Direct model
+    name        = :BeamDynSinusoidalLoad
+    model       = Model(name)
+    nodid       = addnode!(model, nodeCoord)
+    mesh        = hcat(nodid[1:nnodes-1],nodid[2:nnodes])
+    eleid       = addelement!(model, EulerBeam3D, mesh;mat=mat, orient2=SVector(0.,1.,0.))
 
-# Direct model
-name        = :BeamDynSinusoidalLoad
-model       = Model(name)
-nodid       = addnode!(model, nodeCoord)
-mesh        = hcat(nodid[1:nnodes-1],nodid[2:nnodes])
-eleid       = addelement!(model, EulerBeam3D, mesh;mat=mat, orient2=SVector(0.,1.,0.))
+    # Boundary conditions
+    [addelement!(model,Hold,[nodid[1]]  ;field) for field∈[:t1,:t2,:t3,:r1]];           # Support at one end
+    [addelement!(model,Hold,[nodid[nnodes]]  ;field) for field∈[:t1, :t2,:t3,:r1]];     # Support at the other end
+    if bPlanar 
+        [[addelement!(model,Hold,[nodid[i]] ;field) for field∈[:t3]] for i in 2:nnodes-1] # Planar motion constraint for eigenvalue analysis
+    end
 
-# Boundary conditions
-[addelement!(model,Hold,[nodid[1]]  ;field) for field∈[:t1,:t2,:t3,:r1]];           # Support at one end
-[addelement!(model,Hold,[nodid[nnodes]]  ;field) for field∈[:t1, :t2,:t3,:r1]];     # Support at the other end
-if bPlanar 
-    [[addelement!(model,Hold,[nodid[i]] ;field) for field∈[:t3]] for i in 2:nnodes-1] # Planar motion constraint for eigenvalue analysis
+    # Loading conditions
+    if bNodalForceSin
+        @functor with(F, t₂) NodalSin(t) = F * sin(2*π*t/t₂)
+        addelement!(model,DofLoad,[nodid[node_number]];field=:t2,value= NodalSin )
+    end
+
+    if bNodalForceImpulse
+        @functor with(F, t_impulse) NodalImpulse(t) = t <= t_impulse ? F * (1 - cos(2*π*t/t_impulse))/2 : 0.0
+        addelement!(model,DofLoad,[nodid[node_number]];field=:t2,value= NodalImpulse )
+    end
+
+    if bNodalStaticForce
+        @functor with(F) NodalStatic(t) = F
+        addelement!(model,DofLoad,[nodid[node_number]];field=:t2,value= NodalStatic )
+    end
+
+    # Initializing the model (sets all DoF to 0 at t=t₁)
+    initialstate                = initialize!(model; time=t₁);
+
+    if bEigenAnalysis
+        state_stat   = solve(SweepX{0};initialstate,time=[t₁]);
+        # Solve eigenvalue problem
+        nmod            = 10
+        res             = solve(EigX{ℝ}; state=state_stat[1],nmod);
+    end
+
+    # Solving in direct mode
+    state                       = solve(DirectSolver;initialstate,time,verbose=true,maxΔx, maxiter);
+
+    x_dir = [getdof(state[idxLoad];field=:t1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
+    y_dir = [getdof(state[idxLoad];field=:t2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
+    z_dir = [getdof(state[idxLoad];field=:t3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
+    r1_dir = [getdof(state[idxLoad];field=:r1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
+    r2_dir = [getdof(state[idxLoad];field=:r2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
+    r3_dir = [getdof(state[idxLoad];field=:r3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
+
+    # Save
+    if saveDirect
+
+        timeseries = Dict(
+            "X" => x_dir,
+            "Y" => y_dir,
+            "Z" => z_dir,
+            "R1" => r1_dir,
+            "R2" => r2_dir,
+            "R3" => r3_dir,
+        )
+
+        save_timeseries_csv(dated_base(basename_direct); metadata = metadata_direct, comps=timeseries, time=time)
+    end
+
+    # # Draw
+    # figure     = Figure(size = (1000,1000))
+    # ax      = Axis3(figure[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
+    # for to_draw in 1:10:nLoadSteps
+    #     draw!(ax,state[to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(1.0, to_draw/nLoadSteps, 0.)))
+    # end
+    # display(figure)
+    # figure
 end
-
-# Loading conditions
-if bNodalForceSin
-    @functor with(F, t₂) NodalSin(t) = F * sin(2*π*t/t₂)
-    addelement!(model,DofLoad,[nodid[node_number]];field=:t2,value= NodalSin )
-end
-
-if bNodalForceImpulse
-    @functor with(F, t_impulse) NodalImpulse(t) = t <= t_impulse ? F * (1 - cos(2*π*t/t_impulse))/2 : 0.0
-    addelement!(model,DofLoad,[nodid[node_number]];field=:t2,value= NodalImpulse )
-end
-
-if bNodalStaticForce
-    @functor with(F) NodalStatic(t) = F
-    addelement!(model,DofLoad,[nodid[node_number]];field=:t2,value= NodalStatic )
-end
-
-# Initializing the model (sets all DoF to 0 at t=t₁)
-initialstate                = initialize!(model; time=t₁);
-
-if bEigenAnalysis
-    state_stat   = solve(SweepX{0};initialstate,time=[t₁]);
-    # Solve eigenvalue problem
-    nmod            = 10
-    res             = solve(EigX{ℝ}; state=state_stat[1],nmod);
-end
-
-# Solving in direct mode
-state                       = solve(DirectSolver;initialstate,time,verbose=true,maxΔx, maxiter);
-
-x_dir = [getdof(state[idxLoad];field=:t1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
-y_dir = [getdof(state[idxLoad];field=:t2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
-z_dir = [getdof(state[idxLoad];field=:t3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps]
-r1_dir = [getdof(state[idxLoad];field=:r1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
-r2_dir = [getdof(state[idxLoad];field=:r2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
-r3_dir = [getdof(state[idxLoad];field=:r3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps] 
-
-# Save
-if saveDirect
-
-    timeseries = Dict(
-        "X" => x_dir,
-        "Y" => y_dir,
-        "Z" => z_dir,
-        "R1" => r1_dir,
-        "R2" => r2_dir,
-        "R3" => r3_dir,
-    )
-
-    save_timeseries_csv(dated_base(basename_direct); metadata = metadata_direct, comps=timeseries, time=time)
-end
-
-# # Draw
-# figure     = Figure(size = (1000,1000))
-# ax      = Axis3(figure[1,1],xlabel="x [m]", ylabel="y [m]", zlabel="z [m]",aspect=:equal)
-# for to_draw in 1:10:nLoadSteps
-#     draw!(ax,state[to_draw];EulerBeam3D=(;nseg=20,  line_color= RGBf(1.0, to_draw/nLoadSteps, 0.)))
-# end
-# display(figure)
-# figure
 
 
 # Inverse model
 #------------------------------------------
 
 if bInverseAnalysis
-    nnodes = nnodes_inv
-    nodeCoord = nodeCoord_inv
-
-    name        = :BeamDynSinusoidalLoads
+    name        = :inversemodel
     inv_model       = Model(name)
+    if bFromSavedDatas
+        data = load_timeseries_csv(path_to_data)
+        x_dir = data.series["X"][:, end]
+        y_dir = data.series["Y"][:, end]
+        z_dir = data.series["Z"][:, end]
+        r3_dir = data.series["R3"][:, end]
+        time = data.time;
+        splited = split(chop(data.metadata["nodeCoord"], head=1), "; ")
+        println(splited)
+        parsed = [parse.(Float64,split(sp, " ")) for sp in splited]
+        println(parsed)
+        println(typeof(parsed))
+        nnodes = parse(Int64, data.metadata["nel"]) +1
+        nodeCoord = parsed
+    end
+    x_int = [linear_interpolation(time_inv, vcat(x_dir[node]...)) for node in 1:nnodes]
+    y_int = [linear_interpolation(time_inv, vcat(y_dir[node]...)) for node in 1:nnodes]
+    z_int = [linear_interpolation(time_inv, vcat(z_dir[node]...)) for node in 1:nnodes]
+    r3_int = [linear_interpolation(time_inv, vcat(r3_dir[node]...)) for node in 1:nnodes]
+    
     nodid       = addnode!(inv_model, nodeCoord)
-    mesh        = hcat(nodid[1:nnodes-1],nodid[2:nnodes])
+    mesh        = hcat(nodid[1:nnodes_inv-1],nodid[2:nnodes_inv])
     eleid       = addelement!(inv_model, EulerBeam3D, mesh;mat=mat, orient2=SVector(0.,1.,0.))
 
     # Boundary conditions
     [addelement!(inv_model,Hold,[nodid[1]]  ;field) for field∈[:t1,:t2,:t3,:r1]];           # Support at one end
-    [addelement!(inv_model,Hold,[nodid[nnodes]]  ;field) for field∈[:t1, :t2,:t3,:r1]];     # Support at the other end
+    [addelement!(inv_model,Hold,[nodid[nnodes_inv]]  ;field) for field∈[:t1, :t2,:t3,:r1]];     # Support at the other end
     if bPlanar
-        [[addelement!(inv_model,Hold,[nodid[i]] ;field) for field∈[:t3]] for i in 2:nnodes-1] # Planar motion constraint for eigenvalue analysis
+        [[addelement!(inv_model,Hold,[nodid[i]] ;field) for field∈[:t3]] for i in 2:nnodes_inv-1] # Planar motion constraint for eigenvalue analysis
     end
 
-    x_int = [linear_interpolation(time_inv, vcat(x_sin[node]...)) for node in 1:nnodes]
-    y_int = [linear_interpolation(time_inv, vcat(y_sin[node]...)) for node in 1:nnodes]
-    z_int = [linear_interpolation(time_inv, vcat(z_sin[node]...)) for node in 1:nnodes]
-    r3_int = [linear_interpolation(time_inv, vcat(r3_sin[node]...)) for node in 1:nnodes]
 
 
     @functor with() costX(x, t, meas) = 1 * (meas(t)-x)^2
     @functor with() costXother(x, t, meas) = 1 * (meas(t)-x)^2
     @functor with() costU(u, t) = 1*(F-u)^2
     @functor with() costUother(u, t) = 1*u^2
-    e5             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t1,    cost= costXother, costargs= (meas = x_int[node],) ) for node in 1:nnodes]
-    e6             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t2,    cost= costX, costargs= (meas = y_int[node],) ) for node in 1:nnodes]
-    e7             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t3,    cost= costXother, costargs= (meas = z_int[node],) ) for node in 1:nnodes];
-    e7             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:r3,    cost= costXother, costargs= (meas = r3_int[node],) ) for node in 1:nnodes];
-    e2             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t3,Ufield=:t3           ,    cost=costUother )  for node in 1:nnodes-1];
+    e5             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t1,    cost= costXother, costargs= (meas = x_int[node],) ) for node in 1:nnodes_inv]
+    e6             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t2,    cost= costX, costargs= (meas = y_int[node],) ) for node in 1:nnodes_inv]
+    e7             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t3,    cost= costXother, costargs= (meas = z_int[node],) ) for node in 1:nnodes_inv];
+    e7             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:r3,    cost= costXother, costargs= (meas = r3_int[node],) ) for node in 1:nnodes_inv];
+    e2             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t3,Ufield=:t3           ,    cost=costUother )  for node in 1:nnodes_inv-1];
     e3             = [addelement!(inv_model,SingleUdof,[nodid[node_number]]; Xfield=:t2,Ufield=:t2    ,    cost=costU )];
-    e3             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t2,Ufield=:t2           ,    cost=costUother )  for node in 1:nnodes-1 if node != node_number];
-    e4             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t1,Ufield=:t1           ,    cost=costUother )  for node in 1:nnodes-1];
+    e3             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t2,Ufield=:t2           ,    cost=costUother )  for node in 1:nnodes_inv-1 if node != node_number];
+    e4             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t1,Ufield=:t1           ,    cost=costUother )  for node in 1:nnodes_inv-1];
 
 
-    [[addelement!(inv_model,Hold,[nodid[i]] ;field) for field∈[:t3, :r2, :r1]] for i in 1:nnodes]
+    [[addelement!(inv_model,Hold,[nodid[i]] ;field) for field∈[:t3, :r2, :r1]] for i in 1:nnodes_inv]
 
     initialstate    = initialize!(inv_model;time=t₁)
     stateXUA         = solve(InvSolver;initialstate=[initialstate], time=[time_inv],verbose=true,maxiter,maxΔx,maxΔλ,maxΔu,maxΔa);
 
 
-    x_inv =  [getdof(stateXUA[1][idxLoad];field=:t1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
-    y_inv =  [getdof(stateXUA[1][idxLoad];field=:t2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
-    z_inv =  [getdof(stateXUA[1][idxLoad];field=:t3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
-    r1_inv = [getdof(stateXUA[1][idxLoad];field=:r1,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
-    r2_inv = [getdof(stateXUA[1][idxLoad];field=:r2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
-    r3_inv = [getdof(stateXUA[1][idxLoad];field=:r3,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
+    x_inv =  [getdof(stateXUA[1][idxLoad];field=:t1,nodID=nodid[1:nnodes_inv]) for idxLoad ∈ 1:nLoadSteps_inv]
+    y_inv =  [getdof(stateXUA[1][idxLoad];field=:t2,nodID=nodid[1:nnodes_inv]) for idxLoad ∈ 1:nLoadSteps_inv]
+    z_inv =  [getdof(stateXUA[1][idxLoad];field=:t3,nodID=nodid[1:nnodes_inv]) for idxLoad ∈ 1:nLoadSteps_inv]
+    r1_inv = [getdof(stateXUA[1][idxLoad];field=:r1,nodID=nodid[1:nnodes_inv]) for idxLoad ∈ 1:nLoadSteps_inv]
+    r2_inv = [getdof(stateXUA[1][idxLoad];field=:r2,nodID=nodid[1:nnodes_inv]) for idxLoad ∈ 1:nLoadSteps_inv]
+    r3_inv = [getdof(stateXUA[1][idxLoad];field=:r3,nodID=nodid[1:nnodes_inv]) for idxLoad ∈ 1:nLoadSteps_inv]
 
 
-    U_t_inv = [getdof(stateXUA[1][idxLoad];class = :U, field=:t2,nodID=nodid[1:nnodes]) for idxLoad ∈ 1:nLoadSteps_inv]
+    U_t_inv = [getdof(stateXUA[1][idxLoad];class = :U, field=:t2,nodID=nodid[1:nnodes_inv]) for idxLoad ∈ 1:nLoadSteps_inv]
 
     # Save
 
