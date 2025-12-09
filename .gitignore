@@ -4,3 +4,4 @@ Report/
 Manifest.toml
 !Report/report.tex
 !Report/report.pdf
+*.csv
