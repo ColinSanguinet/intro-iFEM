@@ -30,18 +30,18 @@ mat         = BeamCrossSection(EA=EA,EI₂=EI₂,EI₃=EI₃,GJ=GJ,μ=μ,ι₁=�
 t₁ = 0.0
 t₂ = 1.0
 maxiter     = 10
-maxΔx       = 1e-6
+maxΔx       = 1e-5
 maxΔu       = 1e-6
 maxΔa       = 1e-6
 maxΔλ       = Inf
 
 # Mesh Definition Direct
-nel         = 10    # Number of elements
+nel         = 30    # Number of elements
 nnodes      = nel+1 # Number of nodes
 nodeCoord   = hcat((0:L/nel:L),zeros(Float64,nnodes,2)); # Node coordinates
 
 # Mesh Definition Inverse
-nel_inv         = 50    # Number of elements
+nel_inv         = 30    # Number of elements
 nnodes_inv      = nel_inv+1 # Number of nodes
 nodeCoord_inv   = hcat((0:L/nel_inv:L),zeros(Float64,nnodes_inv,2)); # Node coordinates
 
@@ -69,7 +69,7 @@ time_inv = t₁+Δt₀:Δtᵢₙᵥ:t₂
 nLoadSteps_inv = length(time_inv)
 bInverseAnalysis = true
 bFromSavedDatas = true
-path_to_data = "20251128_direct_static_10elts.csv"
+path_to_data = "20251128_direct_static_30elts.csv"
 InvSolver        = DirectXUA{0,0,0}   # Dynamic solver for the inverse analysis
 
 # Saving config
@@ -85,13 +85,19 @@ metadata_direct = add_struct_to_dict(
     ), 
     mat)
 
-saveInverse = false
-basename_inverse = "inverse_test"
+saveInverse = true
+basename_inverse = "inverse_static_" * string(nel) * "eltsDirect" * string(nel_inv) * "eltsInverse"
 metadata_inverse = add_struct_to_dict(
     Dict{}(
         "nel" => nel_inv,
         "nodeCoord" => nodeCoord_inv,
-        "typeOfLoad" => "point force"
+        "typeOfLoad" => "point force",
+        "nodenumber_of_force" => node_number,
+        "CostXfactor" => 1.,
+        "CostXotherfactor" => 1.,
+        "CostUfactor" => 1.,
+        "CostUotherfactor" => 1.,
+
     ), 
     mat)
 
@@ -193,10 +199,10 @@ if bInverseAnalysis
     inv_model       = Model(name)
     if bFromSavedDatas
         data = load_timeseries_csv(path_to_data)
-        x_dir = data.series["X"][:, end]
-        y_dir = data.series["Y"][:, end]
-        z_dir = data.series["Z"][:, end]
-        r3_dir = data.series["R3"][:, end]
+        x_dir = data.series["X"]
+        y_dir = data.series["Y"]
+        z_dir = data.series["Z"]
+        r3_dir = data.series["R3"]
         time = data.time;
         splited = split(chop(data.metadata["nodeCoord"], head=1), "; ")
         println(splited)
@@ -206,12 +212,16 @@ if bInverseAnalysis
         nnodes = parse(Int64, data.metadata["nel"]) +1
         nodeCoord = parsed
     end
-    x_int = [linear_interpolation(time_inv, vcat(x_dir[node]...)) for node in 1:nnodes]
-    y_int = [linear_interpolation(time_inv, vcat(y_dir[node]...)) for node in 1:nnodes]
-    z_int = [linear_interpolation(time_inv, vcat(z_dir[node]...)) for node in 1:nnodes]
-    r3_int = [linear_interpolation(time_inv, vcat(r3_dir[node]...)) for node in 1:nnodes]
+    x_int = [linear_interpolation(time_inv, x_dir[node,:]) for node in 1:nnodes]
+    y_int = [linear_interpolation(time_inv, y_dir[node,:]) for node in 1:nnodes]
+    z_int = [linear_interpolation(time_inv, z_dir[node,:]) for node in 1:nnodes]
+    r3_int = [linear_interpolation(time_inv, r3_dir[node,:]) for node in 1:nnodes]
+    # x_int = [linear_interpolation(time_inv, vcat(x_dir[node]...)) for node in 1:nnodes]
+    # y_int = [linear_interpolation(time_inv, vcat(y_dir[node]...)) for node in 1:nnodes]
+    # z_int = [linear_interpolation(time_inv, vcat(z_dir[node]...)) for node in 1:nnodes]
+    # r3_int = [linear_interpolation(time_inv, vcat(r3_dir[node]...)) for node in 1:nnodes]
     
-    nodid       = addnode!(inv_model, nodeCoord)
+    nodid       = addnode!(inv_model, nodeCoord_inv)
     mesh        = hcat(nodid[1:nnodes_inv-1],nodid[2:nnodes_inv])
     eleid       = addelement!(inv_model, EulerBeam3D, mesh;mat=mat, orient2=SVector(0.,1.,0.))
 
@@ -233,8 +243,9 @@ if bInverseAnalysis
     e7             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:t3,    cost= costXother, costargs= (meas = z_int[node],) ) for node in 1:nnodes_inv];
     e7             = [addelement!(inv_model,SingleDofCost,[nodid[node]];class=:X,field=:r3,    cost= costXother, costargs= (meas = r3_int[node],) ) for node in 1:nnodes_inv];
     e2             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t3,Ufield=:t3           ,    cost=costUother )  for node in 1:nnodes_inv-1];
+    e3             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t2,Ufield=:t2           ,    cost=costUother )  for node in 1:node_number-1];
     e3             = [addelement!(inv_model,SingleUdof,[nodid[node_number]]; Xfield=:t2,Ufield=:t2    ,    cost=costU )];
-    e3             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t2,Ufield=:t2           ,    cost=costUother )  for node in 1:nnodes_inv-1 if node != node_number];
+    e3             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t2,Ufield=:t2           ,    cost=costUother )  for node in node_number+1:nnodes_inv];
     e4             = [addelement!(inv_model,SingleUdof,[nodid[node]]; Xfield=:t1,Ufield=:t1           ,    cost=costUother )  for node in 1:nnodes_inv-1];
 
 
@@ -265,6 +276,7 @@ if bInverseAnalysis
             "R1" => r1_inv,
             "R2" => r2_inv,
             "R3" => r3_inv,
+            "Fy" => U_t_inv,
         )
 
         save_timeseries_csv(dated_base(basename_inverse); metadata = metadata_inverse, comps=timeseries, time=time_inv)
@@ -291,4 +303,13 @@ if bInverseAnalysis
     # end
     # display(figure)
     # figure
+10    # println("node_number = ", node_number)
+    # println(U_t_inv[end, :].size)
+    # println(U_t_inv[end, :])
+    # # Create a figure for each component
+    # fig = Figure(size = (1000, 600))
+    # ax = Axis(fig[1, 1], title = "Comparison: Fy", xlabel = "nodenumber", ylabel = "Fy")
+    # lines!(ax, 1:nnodes_inv-1, U_t_inv[end, :], label = "Inverse Fy", linestyle = :dash, linewidth = 2)
+    # axislegend(ax)
+    # save("comparison_Fy_frominversemain.png", fig)
 end
