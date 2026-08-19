@@ -129,6 +129,13 @@ if bNodalForceImpulse
     addelement!(model,DofLoad,[nodid[node_number]];field=:t2,value= NodalImpulse )
 end
 
+if bDistributedForceSinStatic
+    @functor with(F, L, nodeCoord) DistSinStat(t, x_pos) = F * t * sin(2*π*x_pos.second/L)
+    for node in 1:nnodes
+        addelement!(model,DofLoad,[nodid[node]];field=:t2, value= DistSinStat, valueargs=(x_pos = nodeCoord[node,1]) )
+    end
+end
+
 if bNodalStaticForce
     @functor with(F) NodalStatic(t) = F
     addelement!(model,DofLoad,[nodid[node_number]];field=:t2,value= NodalStatic )
@@ -199,11 +206,10 @@ if bInverseAnalysis
         [[addelement!(inv_model,Hold,[nodid[i]] ;field) for field∈[:t3]] for i in 2:nnodes-1] # Planar motion constraint for eigenvalue analysis
     end
 
-    x_int = [linear_interpolation(time_inv, vcat(x_sin[node]...)) for node in 1:nnodes]
-    y_int = [linear_interpolation(time_inv, vcat(y_sin[node]...)) for node in 1:nnodes]
-    z_int = [linear_interpolation(time_inv, vcat(z_sin[node]...)) for node in 1:nnodes]
-    r3_int = [linear_interpolation(time_inv, vcat(r3_sin[node]...)) for node in 1:nnodes]
-
+    x_int = [linear_interpolation(time_inv, vcat(x_dir[node]...)) for node in 1:nnodes]
+    y_int = [linear_interpolation(time_inv, vcat(y_dir[node]...)) for node in 1:nnodes]
+    z_int = [linear_interpolation(time_inv, vcat(z_dir[node]...)) for node in 1:nnodes]
+    r3_int = [linear_interpolation(time_inv, vcat(r3_dir[node]...)) for node in 1:nnodes]
 
     @functor with() costX(x, t, meas) = 1 * (meas(t)-x)^2
     @functor with() costXother(x, t, meas) = 1 * (meas(t)-x)^2
