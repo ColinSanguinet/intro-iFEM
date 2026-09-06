@@ -10,6 +10,219 @@ function dated_base(base::AbstractString)
 end
 
 """
+    parse_metadata_csv(path::AbstractString) -> Dict{String,Any}
+
+Read the first three CSV records (METADATA, header row, metadata row) using CSV.jl
+and convert each metadata value to Float64, Vector{Float64}, or Matrix{Float64}
+when possible. If conversion fails the raw string is returned.
+"""
+function parse_metadata_csv(csvfile::AbstractString)
+    !isfile(csvfile) && error("CSV file not found: $csvfile")
+
+    rows = collect(CSV.File(csvfile; header=false, limit=3))
+    length(rows) < 3 && error("CSV must contain at least 3 rows (METADATA, header, values)")
+
+    hdr_row = rows[2]
+    val_row = rows[3]
+
+    headers = [string(x) for x in values(hdr_row)]
+    rawvals = [string(x) for x in values(val_row)]
+
+    # (reconstruction of headers/raw values moved below after helper defs)
+
+    function try_parse_num(tok::AbstractString)
+        tok = strip(tok)
+        isempty(tok) && return nothing
+        try
+            return parse(Float64, tok)
+        catch
+            return nothing
+        end
+    end
+
+    # Split string at top-level separators (ignore separators inside nested brackets)
+    function split_top_level(s::AbstractString, sep::Char)
+        res = String[]
+        buf = IOBuffer()
+        depth = 0
+        for c in collect(s)
+            if c == '['
+                depth += 1
+                print(buf, c)
+            elseif c == ']'
+                depth -= 1
+                print(buf, c)
+            elseif c == sep && depth == 0
+                push!(res, String(take!(buf)))
+            else
+                print(buf, c)
+            end
+        end
+        leftover = String(take!(buf))
+        if !isempty(strip(leftover))
+            push!(res, leftover)
+        end
+        return res
+    end
+
+        # Reconstruct header/value lists if CSV.jl fragmented the metadata row
+        # into multiple columns (e.g. produced many "missing" placeholders).
+        # Detect a combined header token anywhere (not just at headers[1]).
+        if any(h -> occursin(',', h), headers) && (length(headers) == 1 || any(h -> lowercase(strip(h)) == "missing", headers))
+            # find the element that contains the combined header string
+            idx = findfirst(h -> occursin(',', h), headers)
+            combined = idx === nothing ? headers[1] : headers[idx]
+            headers = [strip(h) for h in split_top_level(combined, ',')]
+            # reconstruct rawvals by joining fragments (treat literal "missing" as empty)
+            raw_join = join([v == "missing" ? "" : v for v in rawvals], ' ')
+            rawvals = [strip(v) for v in split_top_level(raw_join, ',')]
+        end
+
+        # Merge any bracketed values that were split across multiple fields
+        # (e.g. a long "[...; ...; ...]" that CSV widened). This concatenates
+        # subsequent rawvals until the closing ']' is found.
+        i = 1
+        merged = String[]
+        while i <= length(rawvals)
+            s = rawvals[i]
+            s_strip = strip(s)
+            if startswith(s_strip, "[") && !endswith(s_strip, "]")
+                buf = s
+                j = i + 1
+                found = false
+                while j <= length(rawvals)
+                    buf *= ";" * rawvals[j]
+                    if occursin("]", rawvals[j])
+                        found = true
+                        break
+                    end
+                    j += 1
+                end
+                push!(merged, strip(buf))
+                i = found ? j + 1 : j + 1
+            else
+                push!(merged, s_strip)
+                i += 1
+            end
+        end
+        rawvals = merged
+
+        # (reconstructed header/value lists)
+
+    function parse_bracketed(s::AbstractString)
+        inner = strip(s[2:end-1])
+        # Nested bracketed arrays like [[1,2],[3,4]]
+        if startswith(inner, "[")
+            parts = split_top_level(inner, ',')
+            parsed_parts = [begin
+                p = strip(x)
+                if startswith(p, "[") && endswith(p, "]")
+                    parse_bracketed(p)
+                else
+                    # try to parse as simple vector
+                    toks = filter(x->x!="", split(p, r"[,\s]+"))
+                    try
+                        [parse(Float64,t) for t in toks]
+                    catch
+                        toks
+                    end
+                end
+            end for x in parts]
+
+            # If all parts are numeric vectors of equal length -> matrix
+            if all(x->isa(x, AbstractVector{Float64}), parsed_parts)
+                lengths = unique(length.(parsed_parts))
+                if length(lengths) == 1
+                    nrows = length(parsed_parts)
+                    ncols = lengths[1]
+                    M = Array{Float64}(undef, nrows, ncols)
+                    for i in 1:nrows
+                        M[i, :] = parsed_parts[i]
+                    end
+                    return M
+                end
+            end
+            return parsed_parts
+        end
+
+        # matrix using semicolons to separate rows
+        if occursin(";", inner)
+            rows_s = split(inner, ';')
+            parsed = [filter(x->x!="", split(strip(r), r"[,\s]+")) for r in rows_s]
+            parsed_nums = Vector{Vector{Float64}}()
+            for r in parsed
+                row_nums = Float64[]
+                for t in r
+                    try
+                        push!(row_nums, parse(Float64, t))
+                    catch
+                        # fallback to strings if any element fails to parse
+                        return parsed
+                    end
+                end
+                push!(parsed_nums, row_nums)
+            end
+            nrows = length(parsed_nums); ncols = length(parsed_nums[1])
+            M = Array{Float64}(undef, nrows, ncols)
+            for i in 1:nrows
+                length(parsed_nums[i]) == ncols || error("inconsistent columns in matrix metadata")
+                M[i, :] = parsed_nums[i]
+            end
+            return M
+        end
+
+        # simple bracketed vector or flattened matrix
+        toks = filter(x->x!="", split(inner, r"[,\s]+"))
+        try
+            nums = [parse(Float64,t) for t in toks]
+            # If flattened node coordinates (triplets), reshape to n x 3 matrix
+            if length(nums) >= 3 && length(nums) % 3 == 0
+                nrows = length(nums) ÷ 3
+                M = Array{Float64}(undef, nrows, 3)
+                for i in 1:nrows
+                    M[i, :] = nums[(3*(i-1)+1):(3*i)]
+                end
+                return M
+            end
+            return nums
+        catch
+            return toks
+        end
+    end
+
+    function convert_value(s::AbstractString)
+        s = strip(s)
+        isempty(s) && return s
+        # bracketed list or matrix
+        if startswith(s, "[") && endswith(s, "]")
+            return parse_bracketed(s)
+        end
+        # whitespace- or comma-separated vector without brackets
+        if occursin(',', s) || occursin(' ', s)
+            toks = filter(x->x!="", split(s, r"[,\s]+"))
+            nums = map(t -> try_parse_num(t), toks)
+            if all(x->x !== nothing, nums)
+                return [Float64(x) for x in nums]
+            else
+                return toks
+            end
+        end
+        # scalar number
+        n = try_parse_num(s)
+        n !== nothing && return n
+        # fallback: return original string
+        return s
+    end
+
+    meta = Dict{String,Any}()
+    for (h,v) in zip(headers, rawvals)
+        meta[h] = convert_value(v)
+    end
+    return meta
+end
+
+
+"""
     save_timeseries_csv(path; comps::Dict, time=nothing)
 
 Save multiple time-series (vector-of-vectors) into a single CSV file.
@@ -105,10 +318,50 @@ function load_timeseries_csv(path)
 
     # Extract metadata, headers, and values
     headers = split(first_lines[2], ",")
-    values = split(first_lines[3], ",")
+    raw_values = split(first_lines[3], ",")
+
+    # Recombine raw_values in case some metadata fields contained commas
+    function unquote_and_unescape(s)
+        s = strip(s)
+        if startswith(s, '"') && endswith(s, '"')
+            inner = s[2:end-1]
+                return replace(inner, "\"\"" => "\"")
+        else
+            return s
+        end
+    end
+
+    values = String[]
+    i = 1
+    while i <= length(raw_values)
+        v = raw_values[i]
+        vstr = strip(v)
+        if startswith(vstr, "[") && !endswith(vstr, "]")
+            # accumulate until closing bracket found
+            acc = v
+            j = i + 1
+            while j <= length(raw_values) && !occursin("]", raw_values[j])
+                acc *= "," * raw_values[j]
+                j += 1
+            end
+            if j <= length(raw_values)
+                acc *= "," * raw_values[j]
+                push!(values, unquote_and_unescape(acc))
+                i = j + 1
+            else
+                push!(values, unquote_and_unescape(acc))
+                break
+            end
+        else
+            push!(values, unquote_and_unescape(v))
+            i += 1
+        end
+    end
 
     # Build dictionary
-    metadata_dict = Dict(h => to_value(v) for (h, v) in zip(headers, values))
+    metadata_dict = parse_metadata_csv(path)
+    # metadata_dict = Dict(h => convert_to_value(v) for (h, v) in zip(headers, values))
+
 
     # Extract data
     df = CSV.File(csvfile; skipto=6, header = 5) |> DataFrame
@@ -181,21 +434,35 @@ function save_metadata(base, meta)
         push!(values, k[2])
     end
 
-    # Convert everything to strings safely
+    # Convert everything to strings
     title_row = ["METADATA"]
     header_row = string.(fields)
     metadata_row = string.(values)
+    # Quote fields that contain commas or quotes so CSV splitting is safe
+    function quote_csv_field(s)
+        s = string(s)
+        if occursin('"', s)
+            s = replace(s, '"' => "\"\"")
+        end
+        if occursin(',', s) || occursin('"', s) || occursin('\n', s)
+            return '"' * s * '"'
+        else
+            return s
+        end
+    end
+    metadata_row_quoted = quote_csv_field.(metadata_row)
     data_row = ["DATA"]
 
     # Open file and write properly quoted CSV
     open(base * ".csv", "w") do io
         println(io, join(title_row, ","))   # First row
         println(io, join(header_row, ","))     # Second row
-        println(io, join(metadata_row, ","))       # Third row
+        println(io, join(metadata_row_quoted, ","))       # Third row (quoted as needed)
         println(io, join(data_row, ","))   # Fourth row
     end
-
 end
+
+
 
 # Tests
 #------------------------------------------
