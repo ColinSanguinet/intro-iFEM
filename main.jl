@@ -88,7 +88,7 @@ _,node_number         = findmin(abs.(nodeCoord[:,1].-point_load_position)) # Nod
 _,node_number_inv        = findmin(abs.(nodeCoord_inv[:,1].-point_load_position)) # Node where the static load is applied
 F           = -1000.0      # Amplitude of the load [N]
 q           = 0.0          # Uniform lateral load [N/m]
-t_impulse   = 0.1        # Duration of the impulse load [s]
+t_impulse   = 0.01        # Duration of the impulse load [s]
 
 # Inverse analysis properties
 Δtᵢₙᵥ             = 0.01               # Time step for the inverse analysis [s]

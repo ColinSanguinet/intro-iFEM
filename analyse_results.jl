@@ -3,6 +3,12 @@ using CSV, DataFrames, GLMakie, Statistics, Interpolations
 # Load your save_results.jl module
 include("save_results.jl")
 
+path_direct = "20260906_direct_static_middleForce_30elts.csv"
+path_inverse = "20260906_inverse_static_noised_30elts.csv"
+
+base_direct = split(path_direct, '/')[end][10:end-4]
+base_inverse = split(path_inverse, '/')[end][10:end-4]
+
 function load_analysis(file_dir, file_inv)
     # Load direct and inverse results
     direct = load_timeseries_csv(file_dir)
