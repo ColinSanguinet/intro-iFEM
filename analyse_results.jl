@@ -1,93 +1,243 @@
-using CSV, DataFrames, GLMakie, Statistics
+using CSV, DataFrames, GLMakie, Statistics, Interpolations
 
 # Load your save_results.jl module
 include("save_results.jl")
 
-# Load direct and inverse results
-direct = load_timeseries_csv("20251128_direct_static_100elts.csv")
-inverse = load_timeseries_csv("20251209_inverse_static_100eltsDirect100eltsInverse.csv")
+function load_analysis(file_dir, file_inv)
+    # Load direct and inverse results
+    direct = load_timeseries_csv(file_dir)
+    inverse = load_timeseries_csv(file_inv)
 
-# Get the number of nodes from the series (assuming all components have the same number of nodes)
-nnodes = size(direct.series["X"], 1)
-@assert nnodes == size(inverse.series["X"], 1) "Direct and inverse results must have the same number of nodes"
+    println("======================\nSuccessfully loaded data for analysis\n=====================\n")
+
+    return(direct, inverse)
+end
+
 
 # Function to calculate RMSE
 function rmse(a, b)
     return sqrt(mean((a - b).^2))
 end
 
-# Calculate RMSE for each node and component
-components = ["X", "Y", "Z", "R3"]
-rmses = Dict{String, Vector{Float64}}()
-for comp in components
-    rmses[comp] = [rmse(direct.series[comp][i, :], inverse.series[comp][i, :]) for i in 1:nnodes]
+function calculate_RMSE(direct, inverse, nSteps)
+    # Calculate RMSE
+    rmses = Dict{String, Vector{Float64}}()
+    comp = "Y"
+    rmse_y = [rmse(direct.series[comp][:, j], inverse.series[comp][:, j]) for j in 1:nSteps]
+    max_val, max_idx = findmax(rmse_y)
+    println("RMSE maximum $max_val for time index $max_idx .")
+
+    return max_val, max_idx
 end
 
-# Create a figure for each component
-for comp in components
-    fig = Figure(size = (1000, 600))
-    ax = Axis(fig[1, 1], title = "Comparison: $comp", xlabel = "Time", ylabel = comp)
-    for node in 1:nnodes
-        lines!(ax, direct.time, direct.series[comp][node, :], label = "Direct (Node $node)", linewidth = 2)
-        lines!(ax, inverse.time, inverse.series[comp][node, :], label = "Inverse (Node $node)", linestyle = :dash, linewidth = 2)
+function plot_eachComponent(direct, inverse, node_number, component_dict, output_dir, output_name)
+    # Create a figure for each component on a chosen node
+    for (comp,lab) in component_dict
+        local fig = Figure(size = (1000, 600))
+        local ax = Axis(
+            fig[1, 1], 
+            # title = "$comp @ node $node_number", 
+            # titlesize = 25,
+            xlabel = "Time (s)", 
+            ylabel = comp*lab,
+            xlabelsize = 25,       # Increases X label font size
+            ylabelsize = 25,       # Increases Y label font size
+            xticklabelsize = 20,   # Increases X tick label font size
+            yticklabelsize = 20    # Increases Y tick label font size
+            )
+        lines!(ax, direct.time, direct.series[comp][node_number, :], label = "Direct (Node $node_number)", linewidth = 2)
+        lines!(ax, inverse.time, inverse.series[comp][node_number, :], label = "Inverse (Node $node_number)", linestyle = :dash, linewidth = 2)
+        axislegend(ax, labelsize = 25)
+        mkpath(output_dir)
+        save(joinpath(output_dir,"$comp--" * output_name * ".png"), fig)
     end
-    axislegend(ax)
-    save("comparison_$comp.png", fig)
 end
 
-# Create a figure for each component
-fig = Figure(size = (1000, 600))
-ax = Axis(fig[1, 1], title = "Comparison: Fy", xlabel = "nodenumber", ylabel = "Fy")
-GLMakie.scatter!(ax, 1:nnodes, inverse.series["Fy"][:, end], label = "Inverse Fy", color = :blue, markersize = 10)
-axislegend(ax)
-save("comparison_Fy.png", fig)
-
-# Plot RMSE for each component
-fig_rmse = Figure(size = (1000, 600))
-ax_rmse = Axis(fig_rmse[1, 1], title = "RMSE per Node", xlabel = "Node", ylabel = "RMSE")
-for comp in components
-    GLMakie.scatterlines!(ax_rmse, 1:nnodes, rmses[comp], label = comp, marker = :circle, markersize = 10, linewidth = 2)
-end
-axislegend(ax_rmse)
-save("rmse_per_node.png", fig_rmse)
-
-println("Plots saved to current directory.")
-
-# Select 3 timesteps to plot (e.g., first, middle, last)
-ntimesteps = length(direct.time)
-timesteps_to_plot = [1, div(ntimesteps, 2), ntimesteps]
-
-# Create a 3D figure for each selected timestep
-for (i, t) in enumerate(timesteps_to_plot)
-    fig = Figure(size = (1200, 800))
-    ax = Axis3(fig[1, 1],
-        title = "Beam at timestep $t (time = $(round(direct.time[t], digits=3)) s)",
-        xlabel = "X", ylabel = "Y", zlabel = "Z",
-        perspectiveness = 0.5, azimuth = 1.5π, elevation = 0.2π
+function plot_boxplot_disp(direct, inverse, component_dict, output_dir, output_name)
+    # Plot boxplot of the error
+    fig_rmse = Figure(size = (1000, 600))
+    ax_rmse = Axis(
+        fig_rmse[1, 1],
+        # title = "Boxplot", 
+        # titlesize = 25,
+        xlabel = "Position [m]", 
+        ylabel = "absolute error",
+        xlabelsize = 25,       # Increases X label font size
+        ylabelsize = 25,       # Increases Y label font size
+        xticklabelsize = 20,   # Increases X tick label font size
+        yticklabelsize = 20    # Increases Y tick label font size
     )
+    nnodes = size(direct.series["X"], 1)
+    nodes_pos_dir = [direct.metadata["nodeCoord"][node,1] for node in 1:nnodes]
+    nnodes_inv = size(inverse.series["X"], 1)
+    nodes_pos_inv = [inverse.metadata["nodeCoord"][node,1] for node in 1:nnodes_inv]
+    nSteps = length(direct.time)
+    abs_error = zeros((nSteps,nnodes))
+    for (comp,lab) in component_dict
+        for t in 1:nSteps
+            comp_serie_inv =  linear_interpolation(nodes_pos_inv, inverse.series[comp][:,t])
+            # flatten the per-node vectors into one long vector
+            local abs_error_t = vcat([abs.(direct.series[comp][i, t] - comp_serie_inv(nodes_pos_dir[i])) for i in 1:nnodes]...)
+            abs_error[t,:] = abs_error_t
+        end
+        # do the same for the x positions (repeat node index nSteps times)
+        local nnodes_list = vcat([fill(nodes_pos_dir[i], nSteps) for i in 1:nnodes]...)
+        if length(abs_error[:,1]) == 1
+            scatter!(ax_rmse, nnodes_list, abs_error, label=comp*lab, markersize = 15)
+        else
+            w = nodes_pos_dir[2]-nodes_pos_dir[1]
+            boxplot!(ax_rmse, nnodes_list, abs_error, label=comp*lab, width = w)
+        end
 
-    # Plot direct results
-    direct_positions = Point3f[
-        (direct.series["X"][n, t], direct.series["Y"][n, t], direct.series["Z"][n, t])
-        for n in 1:nnodes
-    ]
-    lines!(ax, direct_positions, color = :blue, linewidth = 4, label = "Direct")
-
-    # Plot inverse results
-    inverse_positions = Point3f[
-        (inverse.series["X"][n, t], inverse.series["Y"][n, t], inverse.series["Z"][n, t])
-        for n in 1:nnodes
-    ]
-    lines!(ax, inverse_positions, color = :red, linestyle = :dash, linewidth = 4, label = "Inverse")
-
-    # Add nodes as scatter points for both
-    GLMakie.scatter!(ax, direct_positions, color = :blue, markersize = 10, label = "Direct Nodes")
-    GLMakie.scatter!(ax, inverse_positions, color = :red, markersize = 10, label = "Inverse Nodes")
-
-    # Add legend
-    axislegend(ax, position = :rb)
-
-    save("beam_3d_timestep_$t.png", fig)
+    end
+    # axislegend(ax_rmse, labelsize = 25)
+    fig_rmse[1,2] = Legend(fig_rmse, ax_rmse, labelsize = 25)
+    mkpath(output_dir)
+    save(joinpath(output_dir, output_name * ".png"), fig_rmse)
 end
 
-println("3D beam plots saved to current directory.")
+function plot_deflection(direct, inverse, rng, output_dir, output_name)
+    nnodes = size(direct.series["X"], 1)
+    nodes_pos_dir = [direct.metadata["nodeCoord"][node,1] for node in 1:nnodes]
+    nnodes_inv = size(inverse.series["X"], 1)
+    nodes_pos_inv = [inverse.metadata["nodeCoord"][node,1] for node in 1:nnodes_inv]
+    # Create a figure for beam y displacements
+    fig = Figure(size = (1000, 600))
+    ax_disp = Axis(
+        fig[1, 1], 
+        # title = "y displacement", 
+        # titlesize = 25,
+        xlabel = "Position [m]", 
+        ylabel = "y disp [m]",
+        xlabelsize = 25,       # Increases X label font size
+        ylabelsize = 25,       # Increases Y label font size
+        xticklabelsize = 20,   # Increases X tick label font size
+        yticklabelsize = 20    # Increases Y tick label font size
+        )
+    for state_id in rng
+        global elem1 = GLMakie.scatter!(ax_disp, nodes_pos_dir, direct.series["Y"][:, state_id], label = "Forward : loadstep = "*string(state_id), color = (:blue,(state_id/nSteps*9+1)*0.1), markersize = 10)
+        # GLMakie.scatter!(ax, 1:nnodes, inverse.metadata["Y_input"][:, state_id], label = "Noised input", color = (:purple, (state_id/nSteps*9+1)*0.1), markersize = 10)
+        global elem2 = GLMakie.scatter!(ax_disp, nodes_pos_inv, inverse.series["Y"][:, state_id], label = "Inverse : loadstep = "*string(state_id), color = (:red, (state_id/nSteps*9+1)*0.1),markersize = 10)
+    end
+    # axislegend(ax_disp, labelsize = 25, position = :rb)
+    Legend(fig[1,2], [elem1, elem2], ["forward", "inverse"], labelsize = 25)
+    mkpath(output_dir)
+    save(joinpath(output_dir,output_name * ".png"), fig)
+end
+
+function plot_forceComparison(direct, inverse, rng, output_dir, output_name)
+    nnodes = size(direct.series["X"], 1)
+    nodes_pos_dir = [direct.metadata["nodeCoord"][node,1] for node in 1:nnodes]
+    nnodes_inv = size(inverse.series["X"], 1)
+    nodes_pos_inv = [inverse.metadata["nodeCoord"][node,1] for node in 1:nnodes_inv]
+    # Create a figure for comparing unknown forces reconstruction
+    fig = Figure(size = (1000, 600))
+    ax_force = Axis(
+        fig[1, 1], 
+        # title = "Comparison: Fy", 
+        # titlesize = 25,
+        xlabel = "Position [m]", 
+        ylabel = "Fy [N]",
+        xlabelsize = 25,       # Increases X label font size
+        ylabelsize = 25,       # Increases Y label font size
+        xticklabelsize = 20,   # Increases X tick label font size
+        yticklabelsize = 20    # Increases Y tick label font size
+        )
+    for state_id in rng
+        local ps_forward = Point2f.(nodes_pos_dir, 0)
+        local ps_inverse = Point2f.([pos + 0.02 for pos in nodes_pos_inv], 0)
+        local vs_forward = Vec2f.(0,direct.series["Fdir"][:, end])
+        local vs_inverse = Vec2f.(0,inverse.series["Fy"][:, end])
+        global elem1 = arrows2d!(ax_force, ps_forward, vs_forward, minshaftlength = 1, color = (:blue, (state_id/nSteps*9+1)*0.1))
+        global elem2 = arrows2d!(ax_force, ps_inverse, vs_inverse, minshaftlength = 1, color = (:red, (state_id/nSteps*9+1)*0.1) )
+    end
+    elem1, elem2 = LineElement(color = :blue),  LineElement(color = :red)
+    Legend(fig[1,2], [elem1, elem2], ["forward", "inverse"], labelsize = 25)
+    GLMakie.scatter!(ax_force, nodes_pos_dir, zeros(nnodes), color = :black, markersize = 10)
+    GLMakie.scatter!(ax_force, nodes_pos_inv, zeros(nnodes_inv), color = :purple, markersize = 10)
+    mkpath(output_dir)
+    save(joinpath(output_dir,output_name * ".png"), fig)
+end
+
+
+function plot_boxplot_force(direct, inverse, output_dir, output_name)
+    nnodes = size(direct.series["X"], 1)
+    nodes_pos_dir = [direct.metadata["nodeCoord"][node,1] for node in 1:nnodes]
+    nnodes_inv = size(inverse.series["X"], 1)
+    nodes_pos_inv = [inverse.metadata["nodeCoord"][node,1] for node in 1:nnodes_inv]
+    # Plot boxplot of the error
+    fig_ = Figure(size = (1000, 600))
+    ax_ = Axis(
+        fig_[1, 1],
+        # title = "Boxplot", 
+        # titlesize = 25,
+        xlabel = "Position [m]", 
+        ylabel = "absolute error",
+        xlabelsize = 25,       # Increases X label font size
+        ylabelsize = 25,       # Increases Y label font size
+        xticklabelsize = 20,   # Increases X tick label font size
+        yticklabelsize = 20    # Increases Y tick label font size
+        )
+    nSteps = length(direct.time)
+    abs_error = zeros((nSteps,nnodes))
+    lab = " [N]"
+    for t in 1:nSteps
+        comp_serie_inv =  linear_interpolation(nodes_pos_inv, inverse.series["Fy"][:,t])
+        # flatten the per-node vectors into one long vector
+        local abs_error_t = vcat([abs.(direct.series["Fdir"][i, t] - comp_serie_inv(nodes_pos_dir[i])) for i in 1:nnodes]...)
+        abs_error[t,:] = abs_error_t
+    end
+    # do the same for the x positions (repeat node index nSteps times)
+    local nnodes_list = vcat([fill(nodes_pos_dir[i], nSteps) for i in 1:nnodes]...)
+    if length(abs_error[:,1]) == 1
+        scatter!(ax_, nnodes_list, abs_error, label="Fy"*lab, markersize = 15)
+    else
+        w = nodes_pos_dir[2]-nodes_pos_dir[1]
+        boxplot!(ax_, nnodes_list, abs_error, label="Fy"*lab, width = w)
+    end
+    axislegend(ax_, labelsize = 25)
+    mkpath(output_dir)
+    save(joinpath(output_dir,output_name * ".png"), fig_)
+end
+
+function plot_forces(direct, inverse, node_number, output_dir, output_name)
+    fig = Figure(size = (1000, 600))
+    ax = Axis(
+        fig[1, 1], 
+        # title = "$comp @ node $node_number", 
+        # titlesize = 25,
+        xlabel = "Time (s)", 
+        ylabel = "force y [N]",
+        xlabelsize = 25,       # Increases X label font size
+        ylabelsize = 25,       # Increases Y label font size
+        xticklabelsize = 20,   # Increases X tick label font size
+        yticklabelsize = 20    # Increases Y tick label font size
+        )
+    lines!(ax, direct.time, direct.series["Fdir"][node_number, :], label = "Direct (Node $node_number)", linewidth = 2)
+    lines!(ax, inverse.time, inverse.series["Fy"][node_number, :], label = "Inverse (Node $node_number)", linestyle = :dash, linewidth = 2)
+    axislegend(ax, labelsize = 25)
+    mkpath(output_dir)
+    save(joinpath(output_dir,"Fy--" * output_name * ".png"), fig)
+end
+
+function calculate_forceReconstructionAccuracy(direct, inverse, output_dir, output_name)
+    Wdir = sum(direct.series["Fdir"][:,:] .* direct.series["Y"][:,:], dims=1)
+    Winv = sum(inverse.series["Fy"][:,:] .* inverse.series["Y"][:,:], dims=1)
+    epsilon = vec(abs.((Wdir .- Winv) ./ Wdir) * 100)
+    epsilon = replace!(epsilon, Inf=>NaN)
+    fig = Figure(size = (1000, 600))
+    ax = Axis(
+        fig[1, 1], 
+        # title = "$comp @ node $node_number", 
+        # titlesize = 25,
+        xlabel = "Time (s)", 
+        ylabel = "force_error [%]",
+        xlabelsize = 25,       # Increases X label font size
+        ylabelsize = 25,       # Increases Y label font size
+        xticklabelsize = 20,   # Increases X tick label font size
+        yticklabelsize = 20    # Increases Y tick label font size
+        )
+    scatter!(ax, direct.time, epsilon, markersize = 15)
+    mkpath(output_dir)
+    save(joinpath(output_dir,output_name * ".png"), fig)
+end
